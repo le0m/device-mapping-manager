@@ -8,16 +8,15 @@ import (
 	"context"
 	"device-volume-driver/internal/cgroup"
 	"fmt"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/client"
-	_ "github.com/opencontainers/runtime-spec/specs-go"
-	"golang.org/x/sys/unix"
 	"log"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/moby/moby/client"
+	_ "github.com/opencontainers/runtime-spec/specs-go"
+	"golang.org/x/sys/unix"
 )
 
 // Version string, set at build time.
@@ -66,7 +65,7 @@ func getDeviceInfo(devicePath string) (string, int64, int64, error) {
 func listenForMounts() {
 	ctx := context.Background()
 
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 
 	if err != nil {
 		log.Fatal(err)
@@ -74,22 +73,19 @@ func listenForMounts() {
 
 	defer cli.Close()
 
-	msgs, errs := cli.Events(
-		ctx,
-		types.EventsOptions{Filters: filters.NewArgs(filters.Arg("event", "start"))},
-	)
+	res := cli.Events(ctx, client.EventsListOptions{Filters: make(client.Filters).Add("event", "start")})
 
 	for {
 		select {
-		case err := <-errs:
+		case err := <-res.Err:
 			log.Fatal(err)
-		case msg := <-msgs:
-			info, err := cli.ContainerInspect(ctx, msg.Actor.ID)
+		case msg := <-res.Messages:
+			info, err := cli.ContainerInspect(ctx, msg.Actor.ID, client.ContainerInspectOptions{})
 
 			if err != nil {
 				panic(err)
 			} else {
-				pid := info.State.Pid
+				pid := info.Container.State.Pid
 				version, err := cgroup.GetDeviceCGroupVersion("/", pid)
 
 				log.Printf("The cgroup version for process %d is: %v\n", pid, version)
@@ -101,10 +97,10 @@ func listenForMounts() {
 
 				log.Printf("Checking mounts for process %d\n", pid)
 
-				for _, mount := range info.Mounts {
+				for _, mount := range info.Container.Mounts {
 					log.Printf(
 						"%s/%v requested a volume mount for %s at %s\n",
-						msg.Actor.ID, info.State.Pid, mount.Source, mount.Destination,
+						msg.Actor.ID, info.Container.State.Pid, mount.Source, mount.Destination,
 					)
 
 					if !strings.HasPrefix(mount.Source, "/dev") {
