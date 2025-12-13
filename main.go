@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 	_ "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
@@ -80,74 +81,81 @@ func listenForMounts() {
 		case err := <-res.Err:
 			log.Fatal(err)
 		case msg := <-res.Messages:
-			info, err := cli.ContainerInspect(ctx, msg.Actor.ID, client.ContainerInspectOptions{})
+			processContainer(cli, msg.Actor.ID)
+		}
+	}
+}
 
-			if err != nil {
-				panic(err)
-			} else {
-				pid := info.Container.State.Pid
-				version, err := cgroup.GetDeviceCGroupVersion("/", pid)
+func processContainer(cli *client.Client, id string) {
+	info, err := cli.ContainerInspect(context.Background(), id, client.ContainerInspectOptions{})
+	if err != nil {
+		panic(err)
+	}
 
-				log.Printf("The cgroup version for process %d is: %v\n", pid, version)
+	pid := info.Container.State.Pid
+	version, err := cgroup.GetDeviceCGroupVersion("/", pid)
+	log.Printf("The cgroup version for process %d is: %v\n", pid, version)
+	if err != nil {
+		log.Println(err)
+		return
+	}
 
-				if err != nil {
-					log.Println(err)
-					break
-				}
+	log.Printf("Checking mounts for process %d\n", pid)
+	processMounts(info.Container.Mounts, pid, id, version)
+}
 
-				log.Printf("Checking mounts for process %d\n", pid)
+func processMounts(mounts []container.MountPoint, pid int, containerId string, version int) {
+	api, err := cgroup.New(version)
+	if err != nil {
+		log.Println(err)
+		return
+	}
 
-				for _, mount := range info.Container.Mounts {
-					log.Printf(
-						"%s/%v requested a volume mount for %s at %s\n",
-						msg.Actor.ID, info.Container.State.Pid, mount.Source, mount.Destination,
-					)
+	cgroupPath, sysfsPath, err := api.GetDeviceCGroupMountPath("/", pid)
+	if err != nil {
+		log.Println(err)
+		return
+	}
 
-					if !strings.HasPrefix(mount.Source, "/dev") {
-						log.Printf("%s is not a device... skipping\n", mount.Source)
-						continue
-					}
+	for _, mount := range mounts {
+		log.Printf(
+			"%s/%v requested a volume mount for %s at %s\n",
+			containerId, pid, mount.Source, mount.Destination,
+		)
 
-					api, err := cgroup.New(version)
-					cgroupPath, sysfsPath, err := api.GetDeviceCGroupMountPath("/", pid)
+		if !strings.HasPrefix(mount.Source, "/dev") {
+			log.Printf("%s is not a device... skipping\n", mount.Source)
+			continue
+		}
 
+		cgroupPath = path.Join(rootPath, sysfsPath, cgroupPath)
+		log.Printf("The cgroup path for process %d is at %v\n", pid, cgroupPath)
+		fileInfo, err := os.Stat(mount.Source)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		if fileInfo.IsDir() {
+			err := filepath.Walk(mount.Source,
+				func(path string, info os.FileInfo, err error) error {
 					if err != nil {
-						log.Println(err)
-						break
+						return err
 					}
-
-					cgroupPath = path.Join(rootPath, sysfsPath, cgroupPath)
-
-					log.Printf("The cgroup path for process %d is at %v\n", pid, cgroupPath)
-
-					if fileInfo, err := os.Stat(mount.Source); err != nil {
-						log.Println(err)
-						continue
-					} else {
-						if fileInfo.IsDir() {
-							err := filepath.Walk(mount.Source,
-								func(path string, info os.FileInfo, err error) error {
-									if err != nil {
-										return err
-									} else if info.IsDir() {
-										return nil
-									} else if err = applyDeviceRules(api, path, cgroupPath, pid); err != nil {
-										log.Println(err)
-									}
-									return nil
-								})
-							if err != nil {
-								log.Println(err)
-							}
-						} else {
-							if err = applyDeviceRules(api, mount.Source, cgroupPath, pid); err != nil {
-								log.Println(err)
-							}
-						}
+					if info.IsDir() {
+						return nil
 					}
-
-				}
+					if err := applyDeviceRules(api, path, cgroupPath, pid); err != nil {
+						log.Println(err)
+					}
+					return nil
+				})
+			if err != nil {
+				log.Println(err)
 			}
+			continue
+		}
+		if err := applyDeviceRules(api, mount.Source, cgroupPath, pid); err != nil {
+			log.Println(err)
 		}
 	}
 }
