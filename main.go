@@ -32,7 +32,23 @@ func Ptr[T any](v T) *T {
 
 func main() {
 	log.Printf("Starting Device Mapping Manager version %s\n", Version)
-	listenForMounts()
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer cli.Close()
+
+	containers, err := cli.ContainerList(context.Background(), client.ContainerListOptions{})
+	if err != nil {
+		panic(err)
+	}
+
+	for _, container := range containers.Items {
+		log.Printf("Checking existing container %s %s\n", container.ID[:10], container.Image)
+		processContainer(cli, container.ID)
+	}
+
+	listenForMounts(cli)
 }
 
 func getDeviceInfo(devicePath string) (string, int64, int64, error) {
@@ -57,24 +73,13 @@ func getDeviceInfo(devicePath string) (string, int64, int64, error) {
 
 	major := int64(unix.Major(stat.Rdev))
 	minor := int64(unix.Minor(stat.Rdev))
-
 	log.Printf("Found device: %s %s %d:%d\n", devicePath, deviceType, major, minor)
 
 	return deviceType, major, minor, nil
 }
 
-func listenForMounts() {
-	ctx := context.Background()
-
-	cli, err := client.New(client.FromEnv)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	defer cli.Close()
-
-	res := cli.Events(ctx, client.EventsListOptions{Filters: make(client.Filters).Add("event", "start")})
+func listenForMounts(cli *client.Client) {
+	res := cli.Events(context.Background(), client.EventsListOptions{Filters: make(client.Filters).Add("event", "start")})
 
 	for {
 		select {
