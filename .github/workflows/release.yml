@@ -71,15 +71,19 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
+      - name: Set version
         env:
           TAG: ${{ github.ref_name }}
+        run: |
+          echo "VERSION=${TAG#v}" | tee $GITHUB_ENV
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          platforms: linux/amd64,linux/arm64
           build-args: |
-            VERSION=${TAG#v}
+            VERSION
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
