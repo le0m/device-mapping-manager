@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v*
+
+jobs:
+  release-binaries:
+    name: Build and release binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          cache-dependency-path: go.sum
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          TAG: ${{ github.ref_name }}
+          CGO_ENABLED: 1
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -ldflags "-s -X main.Version=${TAG#v} -linkmode external -extldflags -static" -o dmm-linux-amd64
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          make_latest: true
+          generate_release_notes: true
+          files: |
+            dmm-linux-amd64
+
+  release-container:
+    name: Build and release Docker container
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        env:
+          TAG: ${{ github.ref_name }}
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          build-args: |
+            VERSION=${TAG#v}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
