@@ -2,11 +2,21 @@ name: Test build
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+      - '.github/workflows/*.yml'
   pull_request:
-    branches:
-      - main
+    branches: [ main ]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+      - '.github/workflows/*.yml'
 
 jobs:
   build-binaries:
