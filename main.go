@@ -2,8 +2,6 @@
 
 package main
 
-// #include "ctypes.h"
-import "C"
 import (
 	"context"
 	"device-volume-driver/internal/cgroup"
@@ -23,7 +21,6 @@ import (
 // Version string, set at build time.
 var Version = "development"
 
-const pluginId = "dvd"
 const rootPath = "/host"
 
 func Ptr[T any](v T) *T {

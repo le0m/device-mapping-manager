@@ -1,21 +1,21 @@
 version: "3.8"
 
-
 services:
   dmm:
     image: docker
     entrypoint: docker
     command: |
-      run 
+      run
+      --rm
       -i
-      --name device-manager 
-      --restart always 
-      --privileged 
-      --cgroupns=host 
-      --pid=host 
-      --userns=host 
-      -v /sys:/host/sys 
-      -v /var/run/docker.sock:/var/run/docker.sock 
-      ndouba/device-mapping-manager
+      --name device-manager
+      --restart always
+      --privileged
+      --cgroupns=host
+      --pid=host
+      --userns=host
+      -v /sys:/host/sys
+      -v /var/run/docker.sock:/var/run/docker.sock
+      le0m/device-mapping-manager
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

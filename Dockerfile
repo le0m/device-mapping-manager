@@ -1,20 +1,27 @@
-# syntax=docker/dockerfile:1
-
-FROM golang:1.25
+###
+# Build binary
+###
+FROM golang:1.25 AS builder
 
 ARG VERSION=development
-ENV DEBIAN_FRONTEND noninteractive
+ENV DEBIAN_FRONTEND=noninteractive
 
-WORKDIR /go/src/github.com/allfro/device-volume-driver
+WORKDIR /src
 
-COPY . .
+COPY go.mod go.sum /src/
+RUN go mod download
 
-RUN CGO_ENABLED=1 GOOS=linux go build -ldflags "-s -X main.Version=${VERSION} -linkmode external -extldflags -static" -o /dvd
+COPY *.go /src/
+COPY internal /src/internal
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags "-s -X main.Version=${VERSION} -linkmode external -extldflags -static" -o /dmm
 
-FROM alpine
+###
+# Final image
+###
+FROM alpine:3
 
 WORKDIR /
 
-COPY --from=0 /dvd /dvd
+COPY --from=builder /dmm /dmm
 
-ENTRYPOINT ["/dvd"]
+ENTRYPOINT ["/dmm"]
