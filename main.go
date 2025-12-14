@@ -20,6 +20,9 @@ import (
 	"strings"
 )
 
+// Version string, set at build time.
+var Version = "development"
+
 const pluginId = "dvd"
 const rootPath = "/host"
 
@@ -28,6 +31,7 @@ func Ptr[T any](v T) *T {
 }
 
 func main() {
+	log.Printf("Starting Device Mapping Manager version %s\n", Version)
 	listenForMounts()
 }
 
