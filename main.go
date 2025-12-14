@@ -2,8 +2,6 @@
 
 package main
 
-// #include "ctypes.h"
-import "C"
 import (
 	"context"
 	"device-volume-driver/internal/cgroup"
@@ -14,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 	_ "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
@@ -22,7 +21,6 @@ import (
 // Version string, set at build time.
 var Version = "development"
 
-const pluginId = "dvd"
 const rootPath = "/host"
 
 func Ptr[T any](v T) *T {
@@ -31,7 +29,23 @@ func Ptr[T any](v T) *T {
 
 func main() {
 	log.Printf("Starting Device Mapping Manager version %s\n", Version)
-	listenForMounts()
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer cli.Close()
+
+	containers, err := cli.ContainerList(context.Background(), client.ContainerListOptions{})
+	if err != nil {
+		panic(err)
+	}
+
+	for _, container := range containers.Items {
+		log.Printf("Checking existing container %s %s\n", container.ID[:10], container.Image)
+		processContainer(cli, container.ID)
+	}
+
+	listenForMounts(cli)
 }
 
 func getDeviceInfo(devicePath string) (string, int64, int64, error) {
@@ -56,98 +70,94 @@ func getDeviceInfo(devicePath string) (string, int64, int64, error) {
 
 	major := int64(unix.Major(stat.Rdev))
 	minor := int64(unix.Minor(stat.Rdev))
-
 	log.Printf("Found device: %s %s %d:%d\n", devicePath, deviceType, major, minor)
 
 	return deviceType, major, minor, nil
 }
 
-func listenForMounts() {
-	ctx := context.Background()
-
-	cli, err := client.New(client.FromEnv)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	defer cli.Close()
-
-	res := cli.Events(ctx, client.EventsListOptions{Filters: make(client.Filters).Add("event", "start")})
+func listenForMounts(cli *client.Client) {
+	res := cli.Events(context.Background(), client.EventsListOptions{Filters: make(client.Filters).Add("event", "start")})
 
 	for {
 		select {
 		case err := <-res.Err:
 			log.Fatal(err)
 		case msg := <-res.Messages:
-			info, err := cli.ContainerInspect(ctx, msg.Actor.ID, client.ContainerInspectOptions{})
+			processContainer(cli, msg.Actor.ID)
+		}
+	}
+}
 
-			if err != nil {
-				panic(err)
-			} else {
-				pid := info.Container.State.Pid
-				version, err := cgroup.GetDeviceCGroupVersion("/", pid)
+func processContainer(cli *client.Client, id string) {
+	info, err := cli.ContainerInspect(context.Background(), id, client.ContainerInspectOptions{})
+	if err != nil {
+		panic(err)
+	}
 
-				log.Printf("The cgroup version for process %d is: %v\n", pid, version)
+	pid := info.Container.State.Pid
+	version, err := cgroup.GetDeviceCGroupVersion("/", pid)
+	log.Printf("The cgroup version for process %d is: %v\n", pid, version)
+	if err != nil {
+		log.Println(err)
+		return
+	}
 
-				if err != nil {
-					log.Println(err)
-					break
-				}
+	log.Printf("Checking mounts for process %d\n", pid)
+	processMounts(info.Container.Mounts, pid, id, version)
+}
 
-				log.Printf("Checking mounts for process %d\n", pid)
+func processMounts(mounts []container.MountPoint, pid int, containerId string, version int) {
+	api, err := cgroup.New(version)
+	if err != nil {
+		log.Println(err)
+		return
+	}
 
-				for _, mount := range info.Container.Mounts {
-					log.Printf(
-						"%s/%v requested a volume mount for %s at %s\n",
-						msg.Actor.ID, info.Container.State.Pid, mount.Source, mount.Destination,
-					)
+	cgroupPath, sysfsPath, err := api.GetDeviceCGroupMountPath("/", pid)
+	if err != nil {
+		log.Println(err)
+		return
+	}
 
-					if !strings.HasPrefix(mount.Source, "/dev") {
-						log.Printf("%s is not a device... skipping\n", mount.Source)
-						continue
-					}
+	for _, mount := range mounts {
+		log.Printf(
+			"%s/%v requested a volume mount for %s at %s\n",
+			containerId, pid, mount.Source, mount.Destination,
+		)
 
-					api, err := cgroup.New(version)
-					cgroupPath, sysfsPath, err := api.GetDeviceCGroupMountPath("/", pid)
+		if !strings.HasPrefix(mount.Source, "/dev") {
+			log.Printf("%s is not a device... skipping\n", mount.Source)
+			continue
+		}
 
+		cgroupPath = path.Join(rootPath, sysfsPath, cgroupPath)
+		log.Printf("The cgroup path for process %d is at %v\n", pid, cgroupPath)
+		fileInfo, err := os.Stat(mount.Source)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		if fileInfo.IsDir() {
+			err := filepath.Walk(mount.Source,
+				func(path string, info os.FileInfo, err error) error {
 					if err != nil {
-						log.Println(err)
-						break
+						return err
 					}
-
-					cgroupPath = path.Join(rootPath, sysfsPath, cgroupPath)
-
-					log.Printf("The cgroup path for process %d is at %v\n", pid, cgroupPath)
-
-					if fileInfo, err := os.Stat(mount.Source); err != nil {
-						log.Println(err)
-						continue
-					} else {
-						if fileInfo.IsDir() {
-							err := filepath.Walk(mount.Source,
-								func(path string, info os.FileInfo, err error) error {
-									if err != nil {
-										return err
-									} else if info.IsDir() {
-										return nil
-									} else if err = applyDeviceRules(api, path, cgroupPath, pid); err != nil {
-										log.Println(err)
-									}
-									return nil
-								})
-							if err != nil {
-								log.Println(err)
-							}
-						} else {
-							if err = applyDeviceRules(api, mount.Source, cgroupPath, pid); err != nil {
-								log.Println(err)
-							}
-						}
+					if info.IsDir() {
+						return nil
 					}
-
-				}
+					if err := applyDeviceRules(api, path, cgroupPath, pid); err != nil {
+						log.Println(err)
+					}
+					return nil
+				})
+			if err != nil {
+				log.Println(err)
 			}
+			continue
+		}
+		if err := applyDeviceRules(api, mount.Source, cgroupPath, pid); err != nil {
+			log.Println(err)
 		}
 	}
 }
