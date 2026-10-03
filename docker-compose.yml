@@ -16,6 +16,8 @@ services:
       --userns=host
       -v /sys:/host/sys
       -v /var/run/docker.sock:/var/run/docker.sock
+      -v /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
+      -e DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
       le0m/device-mapping-manager
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

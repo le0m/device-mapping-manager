@@ -4,6 +4,8 @@ This fork has been made to update dependencies for docker v29. If you prefer to 
 
 This also adds a mix of the PRs open on the original repo.
 
+With docker's `systemd` cgroup driver, it also adds the devices to the container scope's `DeviceAllow`, so a `systemctl daemon-reload` on the host no longer revokes access. This needs the host's system D-Bus socket mounted at `/run/dbus/system_bus_socket`; without it, a warning is logged and only the eBPF grant is applied.
+
 # device-mapping-manager
 
 This maps and enables devices into containers running on docker swarm. It is currently only compatible with linux systems that use cgroup v1 and v2.

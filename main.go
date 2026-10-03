@@ -91,7 +91,8 @@ func listenForMounts(cli *client.Client) {
 func processContainer(cli *client.Client, id string) {
 	info, err := cli.ContainerInspect(context.Background(), id, client.ContainerInspectOptions{})
 	if err != nil {
-		panic(err)
+		log.Println(err)
+		return
 	}
 
 	pid := info.Container.State.Pid
@@ -118,7 +119,9 @@ func processMounts(mounts []container.MountPoint, pid int, containerId string, v
 		log.Println(err)
 		return
 	}
+	cgroupPath = path.Join(rootPath, sysfsPath, cgroupPath)
 
+	var devicePaths []string
 	for _, mount := range mounts {
 		log.Printf(
 			"%s/%v requested a volume mount for %s at %s\n",
@@ -130,7 +133,6 @@ func processMounts(mounts []container.MountPoint, pid int, containerId string, v
 			continue
 		}
 
-		cgroupPath = path.Join(rootPath, sysfsPath, cgroupPath)
 		log.Printf("The cgroup path for process %d is at %v\n", pid, cgroupPath)
 		fileInfo, err := os.Stat(mount.Source)
 		if err != nil {
@@ -148,6 +150,8 @@ func processMounts(mounts []container.MountPoint, pid int, containerId string, v
 					}
 					if err := applyDeviceRules(api, path, cgroupPath, pid); err != nil {
 						log.Println(err)
+					} else {
+						devicePaths = append(devicePaths, path)
 					}
 					return nil
 				})
@@ -158,8 +162,12 @@ func processMounts(mounts []container.MountPoint, pid int, containerId string, v
 		}
 		if err := applyDeviceRules(api, mount.Source, cgroupPath, pid); err != nil {
 			log.Println(err)
+		} else {
+			devicePaths = append(devicePaths, mount.Source)
 		}
 	}
+
+	grantSystemdDevices(cgroupPath, devicePaths)
 }
 
 func applyDeviceRules(api cgroup.Interface, mountPath string, cgroupPath string, pid int) error {

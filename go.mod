@@ -4,6 +4,8 @@ go 1.25.4
 
 require (
 	github.com/cilium/ebpf v0.20.0
+	github.com/coreos/go-systemd/v22 v22.7.0
+	github.com/godbus/dbus/v5 v5.2.2
 	github.com/google/uuid v1.6.0
 	github.com/moby/moby/api v1.52.0
 	github.com/moby/moby/client v0.2.1
